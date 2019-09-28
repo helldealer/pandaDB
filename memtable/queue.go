@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"container/heap"
+	"fmt"
 	"sync"
 )
 
@@ -14,6 +15,7 @@ var ImRegistry *ImMemTableRegistry
 
 func init() {
 	ImRegistry = NewImTableRegistry()
+	fmt.Println("queue start")
 }
 
 //todo: len should make a limit, also the limit of tables
@@ -32,6 +34,7 @@ func (im *ImMemTableRegistry) Push(elem *Element) {
 	if im.len == 0 {
 		//Assert im.wait != nil
 		close(im.wait)
+		fmt.Println("registry has something now")
 	}
 	im.len++
 	//todo: size limit
@@ -80,14 +83,28 @@ func (im *ImMemTableRegistry) GetUpdateTime() int64 {
 }
 
 func NewImTableRegistry() *ImMemTableRegistry {
-	return &ImMemTableRegistry{queue: make(PriorityQueue, 0, InitPriorityQueueCap),}
+	return &ImMemTableRegistry{queue: make(PriorityQueue, 0, InitPriorityQueueCap), wait: make(chan struct{})}
 }
+
 
 type Element struct {
 	table    *ImmutableMemTable
 	priority int
 	index    int
 }
+
+func (e *Element) GetImTable() *ImmutableMemTable {
+	return e.table
+}
+
+func (e *Element) GetPriority() int {
+	return e.priority
+}
+
+func (e *Element) GetIndex() int {
+	return e.index
+}
+
 
 type PriorityQueue []*Element
 

@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"pandadb/compaction"
 	"pandadb/memtable"
 )
+
+var Panda DB
 
 type DB struct {
 	name    string
@@ -31,6 +34,7 @@ func (db *DB) Open() error {
 			return errors.New(permissionErr)
 		}
 	}
+	compaction.Init()
 	db.mem.Open()
 	return nil
 }
@@ -48,8 +52,9 @@ func (db *DB) Get(key string) string {
 }
 
 func NewPanda(name, path string, options *Options) *DB {
-
-	return &DB{
-		name, path, memtable.NewMemTable(), options,
-	}
+	Panda.name = name
+	Panda.path = path
+	Panda.options = options
+	Panda.mem = memtable.NewMemTable()
+	return &Panda
 }
