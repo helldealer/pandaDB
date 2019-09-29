@@ -11,15 +11,13 @@ package memtable
 import (
 	"fmt"
 	"github.com/petar/GoLLRB/llrb"
-	"os"
 	"pandadb/util"
-	"pandadb/version"
 	"sync"
 	"time"
 )
 
 const (
-	TableChangeThreshold = 2
+	TableChangeThreshold = 200
 )
 
 const (
@@ -62,9 +60,13 @@ func (m *MemTable) Set(k, v string) {
 		fmt.Println("table convert")
 		if !m.convertToImmutable() {
 			m.WaitDumpFinish()
+			m.immutableMem.lock.RLock()
+			fmt.Printf("@@@@@@@memtree: %v, bak: %v\n", m.immutableMem.memTree, m.immutableMem.memTreeBak)
 			if m.immutableMem.memTree != nil || m.immutableMem.memTreeBak != nil {
-				panic("not clean immutable tree after init compaction")
+				s := fmt.Sprintf("panic tree: %v, bak: %v", m.immutableMem.memTree, m.immutableMem.memTreeBak)
+				panic(s)
 			}
+			m.immutableMem.lock.RUnlock()
 			m.convertToImmutable()
 		}
 		m.lastCompactTime = time.Now().Unix()
@@ -72,33 +74,41 @@ func (m *MemTable) Set(k, v string) {
 	m.memTree.ReplaceOrInsert(&Item{k, v})
 }
 
-func (m *MemTable) Get(k string) string {
+func (m *MemTable) Get(k string) (string, bool) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	item := &Item{k, ""}
 	v := m.memTree.Get(item)
-	if v == nil {
-		//Assert(m.immutableMem != nil)
-		im := m.immutableMem
-		im.lock.RLock()
-		defer im.lock.RUnlock()
-		if im.memTreeBak != nil {
-			v = im.memTreeBak.Get(item)
-			if v != nil {
-				return v.(*Item).value
-			}
-		}
-		if im.memTree != nil {
-			return im.memTree.Get(item).(*Item).value
+	if v != nil {
+		return v.(*Item).value, true
+	}
+
+	im := m.immutableMem
+	util.Assert.NotNil(im)
+	im.lock.RLock()
+	defer im.lock.RUnlock()
+	if im.memTreeBak != nil {
+		v = im.memTreeBak.Get(item)
+		if v != nil {
+			return v.(*Item).value, true
 		}
 	}
-	return v.(*Item).value
+	if im.memTree != nil {
+		v = im.memTree.Get(item)
+		if v != nil {
+			return v.(*Item).value, true
+		}
+	}
+	return "", false
 }
 
 // 外部保证memTable互斥，mem->immutable and registering
 func (m *MemTable) convertToImmutable() bool {
 	m.immutableMem.lock.Lock()
 	defer m.immutableMem.lock.Unlock()
+	if m.immutableMem.waitDumpFinish == nil {
+		m.immutableMem.SetWait()
+	}
 	if m.immutableMem.memTree != nil {
 		//先生成一个临时备用imu table来保证写入不会有较大的百分位点延迟，然后赶紧启动后台compaction
 		if m.immutableMem.memTreeBak != nil {
@@ -107,9 +117,7 @@ func (m *MemTable) convertToImmutable() bool {
 			return false
 		} else {
 			m.immutableMem.memTreeBak = m.memTree
-			if m.immutableMem.elem == nil {
-				panic("elem should not be nil when dump to BackTree")
-			}
+			util.Assert.NotNil(m.immutableMem.elem)
 			ImRegistry.UpdatePriority(m.immutableMem.elem, ImPriorityHigh)
 			m.memTree = llrb.New()
 			return true
@@ -126,136 +134,12 @@ func (m *MemTable) convertToImmutable() bool {
 
 //外部保证immutable互斥
 func (m *MemTable) WaitDumpFinish() {
-	if m.immutableMem.waitDumpFinish == nil {
-		panic("wait dump finish channel not init")
-	}
+	util.Assert.NotNil(m.immutableMem.waitDumpFinish)
 	<-m.immutableMem.waitDumpFinish
-	m.immutableMem.waitDumpFinish = make(chan struct{})
 }
 
 func NewMemTable() *MemTable {
 	return &MemTable{memTree: llrb.New(), memOnly: false, immutableMem: NewImMemTable()}
-}
-
-//-----------------------------------------------------------//
-
-type ImmutableMemTable struct {
-	lock           sync.RWMutex
-	memTree        *llrb.LLRB
-	memTreeBak     *llrb.LLRB
-	waitDumpFinish chan struct{} //后台compaction保证这时两棵树都是nil
-	elem           *Element      //挂在优先队列里
-}
-
-func (im *ImmutableMemTable) GetTrees() (mem, bak *llrb.LLRB) {
-	im.lock.RLock()
-	defer im.lock.RUnlock()
-	return im.memTree, im.memTreeBak
-}
-
-//1. 用什么分隔符分割key和value呢，分隔符会被当做key的一部分或value的一部分而被错误的返回
-//   先暂时通过编码key的长度在key首解决这个问题，长度先不采用uvarient，直接用两字节的固定宽度，
-//   也就是说key和value最长可以为65535字节。
-//2. index放在文文件尾，否则需要遍历两遍树
-
-/*
-key_value_block: //value_length + value
-index header:    //magic number: lhr
-index body:      //key_length + key + value_start_pos: index_length = 2 + key_length + 4
-index tail:      //index_start_pos: 4byte
-//length 2bytes
-*/
-func (im *ImmutableMemTable) Dump() {
-	im.lock.Lock()
-	defer im.lock.Unlock()
-	fmt.Println("start dump!")
-	t, bak := im.memTree, im.memTreeBak
-	if t != nil {
-		im.DumpTree(t)
-	}
-	if bak != nil {
-		im.DumpTree(bak)
-	}
-	im.memTree = nil
-	im.memTreeBak = nil
-	close(im.waitDumpFinish)
-}
-
-func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB) {
-	v := version.VerInfo.IncByOne()
-	filename := fmt.Sprintf("./tmp/%d.tab", v)
-	fmt.Println(filename)
-	f, err := os.Create(filename)
-	if err != nil {
-		panic("cannot open file " + filename)
-	}
-	defer f.Close()
-
-	var (
-		//valuePosWidth     = 4
-		keyValueWidth = 2
-		valuePos      uint32
-	)
-	index := make([]byte, 3)
-	index[0] = 'l'
-	index[1] = 'h'
-	index[2] = 'r'
-
-	t.AscendGreaterOrEqual(&Item{}, func(i llrb.Item) bool {
-		item := i.(*Item)
-
-		key := item.GetKey()
-		keyLen := len(key)
-
-		value := item.GetValue()
-		valueLen := len(value)
-		valueLenBytes := util.Uint16ToBigEndBytes(uint16(valueLen))
-		bodyEntry := append(valueLenBytes, []byte(value)...)
-		_, err := f.Write(bodyEntry) //返回的写入数量 暂时不检查，等到把统计文件大小也当做dump的参数时再考虑
-		if err != nil {
-			panic("write failed in " + filename)
-		}
-
-		index = append(index, util.Uint16ToBigEndBytes(uint16(keyLen))...)
-		index = append(index, []byte(key)...)
-		index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
-		valuePos += uint32(keyValueWidth + valueLen)
-
-		fmt.Println("< new entry >--------------:")
-		fmt.Printf("key: %s; key len: %d; key byte: %v\nvaluepos: %d; index: %v\n",
-			key, keyLen, []byte(key), valuePos, index)
-		fmt.Printf("value: %s; value len: %d, value byte: %v; valuepos: %v\n",
-			value, valueLen, []byte(value), util.Uint32ToBigEndBytes(valuePos))
-
-		return true
-	})
-
-	index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
-
-	fmt.Println("< dump end >------------:")
-	fmt.Printf("file end: index lenth: %d, index %v\n", len(index), index)
-
-	_, err = f.Write(index)
-	if err != nil {
-		panic("write failed in " + filename)
-	}
-	info, _ := f.Stat()
-	fmt.Printf("file size: %d\n", info.Size())
-}
-
-func (im *ImmutableMemTable) Reset() {
-	im.lock.Lock()
-	defer im.lock.Unlock()
-	im.memTree = nil
-	im.memTreeBak = nil
-	im.elem = nil
-	close(im.waitDumpFinish)
-}
-
-func NewImMemTable() *ImmutableMemTable {
-	return &ImmutableMemTable{
-		waitDumpFinish: make(chan struct{}),
-	}
 }
 
 //-----------------------------------------------------------//

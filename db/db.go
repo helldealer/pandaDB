@@ -47,7 +47,7 @@ func (db *DB) Set(key, value string) {
 	db.mem.Set(key, value)
 }
 
-func (db *DB) Get(key string) string {
+func (db *DB) Get(key string) (string, bool) {
 	return db.mem.Get(key)
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/petar/GoLLRB/llrb"
 	"pandadb/memtable"
+	"pandadb/util"
 )
 
 const (
@@ -34,9 +35,11 @@ func (w *Worker) Init() {
 func (w *Worker) Run() {
 	for {
 		fmt.Println("worker running...")
-		memtable.ImRegistry.Wait()
+		<-memtable.ImRegistry.Wait()
 		elem := memtable.ImRegistry.Pop()
-		fmt.Println("pop elem out")
+		fmt.Println("pop elem out\n")
+		fmt.Printf("elem: %v\n", elem)
+		util.Assert.NotNil(elem)
 		table := elem.GetImTable()
 		table.Dump()
 		//更新wal日志，把version也写到wal里

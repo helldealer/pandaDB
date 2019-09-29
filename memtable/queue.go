@@ -3,6 +3,7 @@ package memtable
 import (
 	"container/heap"
 	"fmt"
+	"pandadb/util"
 	"sync"
 )
 
@@ -32,11 +33,12 @@ func (im *ImMemTableRegistry) Push(elem *Element) {
 	defer im.lock.Unlock()
 	heap.Push(&im.queue, elem)
 	if im.len == 0 {
-		//Assert im.wait != nil
+		util.Assert.NotNil(im.wait)
 		close(im.wait)
 		fmt.Println("registry has something now")
 	}
 	im.len++
+	util.Assert.Equal(im.len, im.queue.Len())
 	//todo: size limit
 }
 
@@ -44,13 +46,17 @@ func (im *ImMemTableRegistry) Pop() *Element {
 	im.lock.Lock()
 	defer im.lock.Unlock()
 	if im.len == 0 {
+		fmt.Printf("nil elem")
 		return nil
 	}
+	util.Assert.Equal(im.len, im.queue.Len())
 	im.len--
 	if im.len == 0 {
 		im.wait = make(chan struct{})
 	}
-	return heap.Pop(&im.queue).(*Element)
+	e := heap.Pop(&im.queue).(*Element)
+	fmt.Printf("element pop: %v\n", e)
+	return e
 }
 
 func (im *ImMemTableRegistry) UpdatePriority(elem *Element, newPriority int) {
@@ -65,10 +71,10 @@ func (im *ImMemTableRegistry) Len() int {
 	return im.len
 }
 
-func (im *ImMemTableRegistry) Wait() {
+func (im *ImMemTableRegistry) Wait() <-chan struct{} {
 	im.lock.RLock()
 	defer im.lock.RUnlock()
-	<-im.wait
+	return im.wait
 }
 
 //not need lock, inaccuracy tolerating
@@ -85,7 +91,6 @@ func (im *ImMemTableRegistry) GetUpdateTime() int64 {
 func NewImTableRegistry() *ImMemTableRegistry {
 	return &ImMemTableRegistry{queue: make(PriorityQueue, 0, InitPriorityQueueCap), wait: make(chan struct{})}
 }
-
 
 type Element struct {
 	table    *ImmutableMemTable
@@ -104,7 +109,6 @@ func (e *Element) GetPriority() int {
 func (e *Element) GetIndex() int {
 	return e.index
 }
-
 
 type PriorityQueue []*Element
 
