@@ -13,7 +13,6 @@ import (
 	"github.com/petar/GoLLRB/llrb"
 	"pandadb/log"
 	"pandadb/util"
-	"sync"
 	"time"
 )
 
@@ -34,9 +33,9 @@ const (
 //-----------------------------------------------------------//
 
 //memtable只关心内存就好
+//由section保证并发访问
 type MemTable struct {
 	name            string
-	lock            sync.RWMutex
 	memTree         *llrb.LLRB
 	memOnly         bool //:内存db模式还是磁盘模式; :: 不应该放这里，应该往上层移; ::或许放在这里也合适，可以指定某张表存在内存
 	immutableMem    *ImmutableMemTable
@@ -53,8 +52,6 @@ func (m *MemTable) Close() {
 }
 
 func (m *MemTable) Set(k, v string) {
-	m.lock.Lock()
-	defer m.lock.Unlock()
 	m.memTree.ReplaceOrInsert(&Item{k, v})
 	//fmt.Println("set key value")
 	//fmt.Printf("tree len %d\n", m.memTree.Len())
@@ -77,8 +74,6 @@ func (m *MemTable) Set(k, v string) {
 }
 
 func (m *MemTable) Get(k string) (string, bool) {
-	m.lock.Lock()
-	defer m.lock.Unlock()
 	item := &Item{k, ""}
 	v := m.memTree.Get(item)
 	if v != nil {

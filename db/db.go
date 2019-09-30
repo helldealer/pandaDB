@@ -14,10 +14,10 @@ var Panda DB
 type DB struct {
 	name    string
 	path    string
-	mem     *memtable.MemTable
 	options *Options
-	wp  *compaction.WorkerPool
-	wal *log.WalLogger
+	wp      *compaction.WorkerPool
+	wal     *log.WalLogger
+	pool    *memtable.Pool
 }
 
 func (db *DB) Open() error {
@@ -39,23 +39,43 @@ func (db *DB) Open() error {
 	}
 	log.Init()
 	compaction.Init()
-	db.mem.Open()
 	return nil
 }
 
 func (db *DB) Close() {
-	db.mem.Close()
 	db.wp.Close()
 	db.wal.Close()
 }
 
-func (db *DB) Set(key, value string) {
-	db.wal.WriteKV(db.name, key, value)
-	db.mem.Set(key, value)
+//叫分区可能更合适，一个section是一组相关联的表的集合，它们功用一个memTable结构，在一个区中实现事务会更加高效，因为只竞争一把锁就好。
+//另外事务实现为2pl模式
+func (db *DB) NewSection(name string) *memtable.Section {
+	s := memtable.NewSection(name)
+	if db.pool.RegSection(name, s) {
+		return s
+	}
+	return nil
 }
 
-func (db *DB) Get(key string) (string, bool) {
-	return db.mem.Get(key)
+func (db *DB) GetSection(name string) *memtable.Section {
+	return db.pool.GetSection(name)
+}
+
+func (db *DB) Set(name, key, value string) bool {
+	s := db.GetSection(name)
+	if s == nil {
+		return false
+	}
+	s.Set(key, value)
+	return true
+}
+
+func (db *DB) Get(name, key string) (string, bool) {
+	s := db.pool.GetSection(name)
+	if s == nil {
+		return "", false
+	}
+	return s.Get(key)
 }
 
 func (db *DB) GetNameAndPath() (string, string) {
@@ -66,10 +86,10 @@ func NewPanda(name, path string, options *Options) *DB {
 	Panda.name = name
 	Panda.path = path
 	Panda.options = options
-	Panda.mem = memtable.NewMemTable(name)
 	Panda.wp = &compaction.WorkerP
 	Panda.wp.SetPath(path)
 	Panda.wal = &log.Wal
 	Panda.wal.SetPath(path)
+	Panda.pool = memtable.NewPool()
 	return &Panda
 }
