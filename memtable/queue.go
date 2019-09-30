@@ -93,9 +93,11 @@ func NewImTableRegistry() *ImMemTableRegistry {
 }
 
 type Element struct {
-	table    *ImmutableMemTable
-	priority int
-	index    int
+	table       *ImmutableMemTable
+	sequence    uint64
+	sequenceBak uint64
+	priority    int
+	index       int
 }
 
 func (e *Element) GetImTable() *ImmutableMemTable {
@@ -108,6 +110,14 @@ func (e *Element) GetPriority() int {
 
 func (e *Element) GetIndex() int {
 	return e.index
+}
+
+func (e *Element) GetSeq() uint64 {
+	return e.sequence
+}
+
+func (e *Element) GetSeqBak() uint64 {
+	return e.sequenceBak
 }
 
 type PriorityQueue []*Element

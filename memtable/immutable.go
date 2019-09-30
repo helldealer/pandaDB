@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/petar/GoLLRB/llrb"
 	"os"
+	"pandadb/log"
 	"pandadb/util"
 	"pandadb/version"
 	"sync"
@@ -12,6 +13,8 @@ import (
 //-----------------------------------------------------------//
 
 type ImmutableMemTable struct {
+	name           string
+	sequence        uint64 //memTable convert counter
 	lock           sync.RWMutex
 	memTree        *llrb.LLRB
 	memTreeBak     *llrb.LLRB
@@ -31,23 +34,27 @@ index body:      //key_length + key + value_start_pos: index_length = 2 + key_le
 index tail:      //index_start_pos: 4byte
 //length 2bytes
 */
-func (im *ImmutableMemTable) Dump() {
+func (im *ImmutableMemTable) Dump(root string, seq, seqBak uint64) {
 	im.lock.Lock()
 	defer im.lock.Unlock()
 	fmt.Println("start dump!")
 	t, bak := im.memTree, im.memTreeBak
+	var v uint64
 	if t != nil {
-		im.DumpTree(t)
+		v = im.DumpTree(t, root)
+		log.Wal.WriteCommit(im.name, seq, v)
 	}
 	if bak != nil {
-		im.DumpTree(bak)
+		v= im.DumpTree(bak, root)
+		log.Wal.WriteCommit(im.name, seqBak, v)
 	}
+	fmt.Println("??????##################################")
 	im.Reset()
 }
 
-func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB) {
+func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string) uint64{
 	v := version.VerInfo.IncByOne()
-	filename := fmt.Sprintf("./tmp/%d.tab", v)
+	filename := fmt.Sprintf("%s/%d.tab", root, v)
 	fmt.Println(filename)
 	f, err := os.Create(filename)
 	if err != nil {
@@ -85,26 +92,27 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB) {
 		index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
 		valuePos += uint32(keyValueWidth + valueLen)
 
-		fmt.Println("< new entry >--------------:")
-		fmt.Printf("key: %s; key len: %d; key byte: %v\nvaluepos: %d; index: %v\n",
-			key, keyLen, []byte(key), valuePos, index)
-		fmt.Printf("value: %s; value len: %d, value byte: %v; valuepos: %v\n",
-			value, valueLen, []byte(value), util.Uint32ToBigEndBytes(valuePos))
+		//fmt.Println("< new entry >--------------:")
+		//fmt.Printf("key: %s; key len: %d; key byte: %v\nvaluepos: %d; index: %v\n",
+		//	key, keyLen, []byte(key), valuePos, index)
+		//fmt.Printf("value: %s; value len: %d, value byte: %v; valuepos: %v\n",
+		//	value, valueLen, []byte(value), util.Uint32ToBigEndBytes(valuePos))
 
 		return true
 	})
 
 	index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
 
-	fmt.Println("< dump end >------------:")
-	fmt.Printf("file end: index lenth: %d, index %v\n", len(index), index)
+	//fmt.Println("< dump end >------------:")
+	//fmt.Printf("file end: index lenth: %d, index %v\n", len(index), index)
 
 	_, err = f.Write(index)
 	if err != nil {
 		panic("write failed in " + filename)
 	}
-	info, _ := f.Stat()
-	fmt.Printf("file size: %d\n", info.Size())
+	//info, _ := f.Stat()
+	//fmt.Printf("file size: %d\n", info.Size())
+	return v
 }
 
 //外部保证锁
@@ -116,12 +124,13 @@ func (im *ImmutableMemTable) Reset() {
 	im.waitDumpFinish = nil
 }
 
-func (im *ImmutableMemTable) SetWait(){
+func (im *ImmutableMemTable) SetWait() {
 	im.waitDumpFinish = make(chan struct{})
 }
 
-func NewImMemTable() *ImmutableMemTable {
+func NewImMemTable(name string) *ImmutableMemTable {
 	return &ImmutableMemTable{
+		name: name,
 		waitDumpFinish: make(chan struct{}),
 	}
 }

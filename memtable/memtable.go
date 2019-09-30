@@ -11,6 +11,7 @@ package memtable
 import (
 	"fmt"
 	"github.com/petar/GoLLRB/llrb"
+	"pandadb/log"
 	"pandadb/util"
 	"sync"
 	"time"
@@ -54,24 +55,25 @@ func (m *MemTable) Close() {
 func (m *MemTable) Set(k, v string) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	fmt.Println("set key value")
-	fmt.Printf("tree len %d\n", m.memTree.Len())
+	m.memTree.ReplaceOrInsert(&Item{k, v})
+	//fmt.Println("set key value")
+	//fmt.Printf("tree len %d\n", m.memTree.Len())
 	if m.memTree.Len() >= TableChangeThreshold {
 		fmt.Println("table convert")
 		if !m.convertToImmutable() {
 			m.WaitDumpFinish()
-			m.immutableMem.lock.RLock()
-			fmt.Printf("@@@@@@@memtree: %v, bak: %v\n", m.immutableMem.memTree, m.immutableMem.memTreeBak)
-			if m.immutableMem.memTree != nil || m.immutableMem.memTreeBak != nil {
-				s := fmt.Sprintf("panic tree: %v, bak: %v", m.immutableMem.memTree, m.immutableMem.memTreeBak)
+			im := m.immutableMem
+			im.lock.RLock()
+			fmt.Printf("@@@@@@@memtree: %v, bak: %v\n", im.memTree, im.memTreeBak)
+			if im.memTree != nil || im.memTreeBak != nil {
+				s := fmt.Sprintf("panic tree: %v, bak: %v", im.memTree, im.memTreeBak)
 				panic(s)
 			}
-			m.immutableMem.lock.RUnlock()
+			im.lock.RUnlock()
 			m.convertToImmutable()
 		}
 		m.lastCompactTime = time.Now().Unix()
 	}
-	m.memTree.ReplaceOrInsert(&Item{k, v})
 }
 
 func (m *MemTable) Get(k string) (string, bool) {
@@ -104,30 +106,35 @@ func (m *MemTable) Get(k string) (string, bool) {
 
 // 外部保证memTable互斥，mem->immutable and registering
 func (m *MemTable) convertToImmutable() bool {
-	m.immutableMem.lock.Lock()
-	defer m.immutableMem.lock.Unlock()
-	if m.immutableMem.waitDumpFinish == nil {
-		m.immutableMem.SetWait()
+	im := m.immutableMem
+	im.lock.Lock()
+	defer im.lock.Unlock()
+	if im.waitDumpFinish == nil {
+		im.SetWait()
 	}
-	if m.immutableMem.memTree != nil {
+	if im.memTree != nil {
 		//先生成一个临时备用imu table来保证写入不会有较大的百分位点延迟，然后赶紧启动后台compaction
-		if m.immutableMem.memTreeBak != nil {
+		if im.memTreeBak != nil {
 			//只能提升该table的compaction优先级，然后等待后台compaction
-			ImRegistry.UpdatePriority(m.immutableMem.elem, ImPriorityHigher)
+			ImRegistry.UpdatePriority(im.elem, ImPriorityHigher)
 			return false
 		} else {
-			m.immutableMem.memTreeBak = m.memTree
-			util.Assert.NotNil(m.immutableMem.elem)
-			ImRegistry.UpdatePriority(m.immutableMem.elem, ImPriorityHigh)
+			im.memTreeBak = m.memTree
+			util.Assert.NotNil(im.elem)
+			im.elem.sequenceBak = im.sequence
+			im.sequence++
+			ImRegistry.UpdatePriority(im.elem, ImPriorityHigh)
 			m.memTree = llrb.New()
 			return true
 		}
 	}
-	m.immutableMem.memTree = m.memTree
+	im.memTree = m.memTree
 	//将immutable注册到compaction memTable优先队列里
-	elem := &Element{m.immutableMem, ImPriorityDefault, -1}
-	m.immutableMem.elem = elem
+	elem := &Element{im, im.sequence, 0, ImPriorityDefault, -1}
+	im.elem = elem
 	ImRegistry.Push(elem)
+	log.Wal.WriteTableConvert(m.name, im.sequence)
+	im.sequence++
 	m.memTree = llrb.New()
 	return true
 }
@@ -138,8 +145,8 @@ func (m *MemTable) WaitDumpFinish() {
 	<-m.immutableMem.waitDumpFinish
 }
 
-func NewMemTable() *MemTable {
-	return &MemTable{memTree: llrb.New(), memOnly: false, immutableMem: NewImMemTable()}
+func NewMemTable(name string) *MemTable {
+	return &MemTable{name: name, memTree: llrb.New(), memOnly: false, immutableMem: NewImMemTable(name)}
 }
 
 //-----------------------------------------------------------//
