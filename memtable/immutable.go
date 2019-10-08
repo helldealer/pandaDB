@@ -30,7 +30,7 @@ type ImmutableMemTable struct {
 /*
 key_value_block: //value_length + value
 index header:    //magic number: lhr
-index body:      //key_length + key + value_start_pos: index_length = 2 + key_length + 4
+index body:      //key_length + key + value_start_pos + value_len: index_length = 2 + key_length + 4 + 2
 index tail:      //index_start_pos: 4byte
 //length 2bytes
 */
@@ -90,6 +90,7 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string) uint64{
 		index = append(index, util.Uint16ToBigEndBytes(uint16(keyLen))...)
 		index = append(index, []byte(key)...)
 		index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
+		index = append(index, valueLenBytes...)
 		valuePos += uint32(keyValueWidth + valueLen)
 
 		//fmt.Println("< new entry >--------------:")

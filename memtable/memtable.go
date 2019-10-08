@@ -48,7 +48,7 @@ func (m *MemTable) Open() {
 }
 
 func (m *MemTable) Close() {
-	//：memTable落盘。 ：：落盘应该上层决定
+
 }
 
 func (m *MemTable) Set(k, v string) {
