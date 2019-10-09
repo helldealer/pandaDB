@@ -1,6 +1,8 @@
 package table
 
-import "pandadb/util"
+import (
+	"pandadb/util"
+)
 
 type FileIndex struct {
 	begin  string
@@ -53,6 +55,10 @@ func NewFileIndexFromFile(index []byte) *FileIndex {
 type ValueInfo struct {
 	pos uint32
 	len uint16
+}
+
+func NewValueInfo(pos uint32, len uint16) *ValueInfo{
+	return &ValueInfo{pos, len}
 }
 
 type BloomFiler struct {

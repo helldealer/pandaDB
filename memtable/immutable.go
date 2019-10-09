@@ -13,9 +13,11 @@ import (
 
 //-----------------------------------------------------------//
 
+//两棵树的大小应该不一样，bak树只是一个buffer，应当较小，暂时设置为正常树大小的三分之一，
+// mergeTree时将遍历bak树插入memtree
 type ImmutableMemTable struct {
 	name           string
-	sequence        uint64 //memTable convert counter
+	sequence       uint64 //memTable convert counter
 	lock           sync.RWMutex
 	memTree        *llrb.LLRB
 	memTreeBak     *llrb.LLRB
@@ -35,26 +37,22 @@ index body:      //key_length + key + value_start_pos + value_len: index_length 
 index tail:      //index_start_pos: 4byte
 //length 2bytes
 */
-func (im *ImmutableMemTable) Dump(root string, seq, seqBak uint64) {
+//todo: 这的锁有点糙
+func (im *ImmutableMemTable) Dump(root string) {
 	im.lock.Lock()
 	defer im.lock.Unlock()
 	fmt.Println("start dump!")
-	t, bak := im.memTree, im.memTreeBak
-	var v uint64
-	if t != nil {
-		v = im.DumpTree(t, root)
-		log.Wal.WriteCommit(im.name, seq, v)
+	var merged bool
+	t := im.memTree
+	if im.memTreeBak != nil {
+		t = im.MergeTrees()
+		merged = true
 	}
-	if bak != nil {
-		v= im.DumpTree(bak, root)
-		log.Wal.WriteCommit(im.name, seqBak, v)
-	}
-	fmt.Println("??????##################################")
-	table.SstTables.InsertFile(v, )
+	im.DumpTree(t, root, merged)
 	im.Reset()
 }
 
-func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string) uint64{
+func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string, merged bool) {
 	v := version.VerInfo.IncByOne()
 	filename := fmt.Sprintf("%s/%d.tab", root, v)
 	fmt.Println(filename)
@@ -68,6 +66,10 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string) uint64{
 		//valuePosWidth     = 4
 		keyValueWidth = 2
 		valuePos      uint32
+		key           string
+		begin         string
+		end           string
+		kvMap         = make(map[string]*table.ValueInfo)
 	)
 	index := make([]byte, 3)
 	index[0] = 'l'
@@ -77,7 +79,10 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string) uint64{
 	t.AscendGreaterOrEqual(&Item{}, func(i llrb.Item) bool {
 		item := i.(*Item)
 
-		key := item.GetKey()
+		key = item.GetKey()
+		if begin == "" {
+			begin = key
+		}
 		keyLen := len(key)
 
 		value := item.GetValue()
@@ -94,7 +99,7 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string) uint64{
 		index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
 		index = append(index, valueLenBytes...)
 		valuePos += uint32(keyValueWidth + valueLen)
-
+		kvMap[key] = table.NewValueInfo(valuePos, uint16(valueLen))
 		//fmt.Println("< new entry >--------------:")
 		//fmt.Printf("key: %s; key len: %d; key byte: %v\nvaluepos: %d; index: %v\n",
 		//	key, keyLen, []byte(key), valuePos, index)
@@ -103,7 +108,7 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string) uint64{
 
 		return true
 	})
-
+	end = key
 	index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
 
 	//fmt.Println("< dump end >------------:")
@@ -113,9 +118,23 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string) uint64{
 	if err != nil {
 		panic("write failed in " + filename)
 	}
+	var bak uint64
+	if merged {
+		//如果merge了两棵树，那么需要在commit信息里把第一棵树的seq信息也加上，
+		// 否则wal文件里convert信息和commit信息的seq对应不上
+		if im.sequence >= 2 {
+			bak = im.sequence - 2
+		}
+	}
+	//因为conver后im的seq自增了，所以这里减1，
+	// 如果有baktree的话，由于两次convert对应一次commit，所以要计算bak，把bak也记录进去
+	log.Wal.WriteCommit(im.name, im.sequence -1, bak, v)
+	fmt.Println("??????##################################")
+	//把table file注册到sst的layer0 mature files中
+	table.SstTables.InsertFile(v, root, begin, end, kvMap)
 	//info, _ := f.Stat()
 	//fmt.Printf("file size: %d\n", info.Size())
-	return v
+
 }
 
 //外部保证锁
@@ -131,9 +150,20 @@ func (im *ImmutableMemTable) SetWait() {
 	im.waitDumpFinish = make(chan struct{})
 }
 
+//这里有个平衡问题：在内存中merge两棵树，dump到一个文件和不合并，dump到两个文件，后续compact时再归并
+//现在先选第二种方案
+//当考虑到想sst中注册unmature的file时，第二种方案有很大的不便利性，更换到第一种
+func (im *ImmutableMemTable) MergeTrees() *llrb.LLRB {
+	im.memTreeBak.AscendGreaterOrEqual(&Item{}, func(i llrb.Item) bool {
+		im.memTree.ReplaceOrInsert(i)
+		return true
+	})
+	return im.memTree
+}
+
 func NewImMemTable(name string) *ImmutableMemTable {
 	return &ImmutableMemTable{
-		name: name,
+		name:           name,
 		waitDumpFinish: make(chan struct{}),
 	}
 }

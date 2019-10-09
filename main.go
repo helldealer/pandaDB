@@ -14,7 +14,7 @@ func main() {
 	}
 	sc := panda.NewSection("lhr")
 	start := time.Now()
-	for j:=0; j<1; j++ {
+	for j:=0; j<100; j++ {
 		for i := 0; i < 600; i++ {
 			s := fmt.Sprintf("%dkeykeykey", i)
 			sc.Set(s, s)

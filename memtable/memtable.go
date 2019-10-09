@@ -116,8 +116,8 @@ func (m *MemTable) convertToImmutable() bool {
 		} else {
 			im.memTreeBak = m.memTree
 			util.Assert.NotNil(im.elem)
-			im.elem.sequenceBak = im.sequence
 			im.sequence++
+			log.Wal.WriteTableConvert(m.name, im.sequence)
 			ImRegistry.UpdatePriority(im.elem, ImPriorityHigh)
 			m.memTree = llrb.New()
 			return true
@@ -125,7 +125,7 @@ func (m *MemTable) convertToImmutable() bool {
 	}
 	im.memTree = m.memTree
 	//将immutable注册到compaction memTable优先队列里
-	elem := &Element{im, im.sequence, 0, ImPriorityDefault, -1}
+	elem := &Element{im, ImPriorityDefault, -1}
 	im.elem = elem
 	ImRegistry.Push(elem)
 	log.Wal.WriteTableConvert(m.name, im.sequence)

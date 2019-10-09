@@ -3,7 +3,6 @@ package table
 import (
 	"fmt"
 	"os"
-	"pandadb/compaction"
 	"sync"
 )
 
@@ -21,10 +20,10 @@ type FileInfo struct {
 	index *FileIndex
 }
 
-func newFileInfo(name uint64) *FileInfo {
+func newFileInfo(name uint64, root string) *FileInfo {
 	fi := &FileInfo{}
 	fi.name = name
-	filename := fmt.Sprintf("%s/%d.tab", compaction.WorkerP.GetPath(), name)
+	filename := fmt.Sprintf("%s/%d.tab", root, name)
 	f, err := os.Open(filename)
 	if err != nil {
 		panic("cannot open the file when build file info")
@@ -33,14 +32,14 @@ func newFileInfo(name uint64) *FileInfo {
 	return fi
 }
 
-func NewFileInfoFromCompaction(name uint64, begin, end string, kvMap map[string]*ValueInfo) *FileInfo {
-	fi := newFileInfo(name)
+func NewFileInfoFromCompaction(name uint64, root, begin, end string, kvMap map[string]*ValueInfo) *FileInfo {
+	fi := newFileInfo(name, root)
 	fi.index = NewFileIndex(begin, end, kvMap)
 	return fi
 }
 
-func NewFileInfoFromFile(name uint64, index []byte) *FileInfo {
-	fi := newFileInfo(name)
+func NewFileInfoFromFile(name uint64, root string, index []byte) *FileInfo {
+	fi := newFileInfo(name, root)
 	fi.index = NewFileIndexFromFile(index)
 	return fi
 }

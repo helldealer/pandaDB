@@ -11,7 +11,8 @@ var (
 	DefaultBucketNum   uint8 = 6
 	DefaultNameFmt           = "%s/%d.wal"
 	DefaultKeyValueFmt       = "insert:table:%s,key:%s,value:%v\n"
-	DefaultCommitFmt         = "commit:table:%s,sequence%d,version%d\n"
+	//commit 的bak有点词不达意，再改改
+	DefaultCommitFmt         = "commit:table:%s,sequence%d,bak%d,version%d\n"
 	DefaultConvertFmt        = "convert:table:%s,sequence%d\n"
 	//DefaultK
 )
@@ -56,8 +57,8 @@ func (w *WalLogger) WriteKV(table, key, value string) {
 	w.Write(table, s, false)
 }
 
-func (w *WalLogger) WriteCommit(table string, seq, version uint64) {
-	s := fmt.Sprintf(DefaultCommitFmt, table, seq, version)
+func (w *WalLogger) WriteCommit(table string, seq, bak, version uint64) {
+	s := fmt.Sprintf(DefaultCommitFmt, table, seq, bak, version)
 	w.Write(table, s, true)
 }
 
@@ -67,13 +68,15 @@ func (w *WalLogger) WriteTableConvert(table string, seq uint64) {
 }
 
 //todo: all panic is silly!
+//写文件要有重试和错误判断，这里是有可能失败的，不能无脑panic
 func (w *WalLogger) Write(tableName string, sentence string, commit bool) bool {
 	b := w.buckets[TableNameHash(tableName, w.bucketNum)]
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	n, err := b.file.WriteString(sentence)
 	if err != nil || n != len(sentence) {
-		panic("write failed in file: " + b.name)
+		s := fmt.Sprintf("err:%s,n:%d,len:%d", err, n, len(sentence))
+		panic("write failed in file: " + b.name + ": " + s)
 	}
 	b.dirty = true
 	if commit {

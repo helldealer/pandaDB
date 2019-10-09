@@ -7,6 +7,7 @@ import (
 	"pandadb/compaction"
 	"pandadb/log"
 	"pandadb/memtable"
+	"pandadb/table"
 )
 
 var Panda DB
@@ -38,6 +39,7 @@ func (db *DB) Open() error {
 		}
 	}
 	log.Init()
+	table.Init()
 	compaction.Init()
 	return nil
 }

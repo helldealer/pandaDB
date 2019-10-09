@@ -2,7 +2,6 @@ package compaction
 
 import (
 	"fmt"
-	"github.com/petar/GoLLRB/llrb"
 	"pandadb/memtable"
 	"pandadb/util"
 )
@@ -68,7 +67,7 @@ func (w *Worker) Run() {
 		这样解决：commit写入使添加version字段，成功写到日志中后将该文件添加到可以成熟文件集合中，成熟的文件意味着该文件可以被读和merge以及提供快照。
 		另一方面，如果这时候commit信息没有被写入到wal，那么重启后重新将log文件中的读写内容写入到tab文件，原来的同名文件被覆盖。
 		*/
-		table.Dump(WorkerP.path, elem.GetSeq(), elem.GetSeqBak())
+		table.Dump(WorkerP.path)
 	}
 }
 
@@ -76,9 +75,4 @@ func (w *Worker) Close() {
 
 }
 
-//这里有个平衡问题：在内存中merge两棵树，dump到一个文件和不合并，dump到两个文件，后续compact时再归并
-//现在先选第二种方案
-//当考虑到想sst中注册unmature的file时，第二种方案有很大的不便利性，更换到第一种
-func MergeTrees() *llrb.LLRB {
-	panic("need implement")
-}
+

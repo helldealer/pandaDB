@@ -7,17 +7,18 @@ import (
 	"sync"
 )
 
+//todo：每个区整一个独立的sst
+//现在先用全局的sst
 type Section struct {
-	name  string
-	lock  sync.RWMutex
-	mem   *MemTable
-	wal   *os.File
-	sst   *table.Sst
+	name string
+	lock sync.RWMutex
+	mem  *MemTable
+	wal  *os.File
+	sst  *table.Sst
 }
 
 type FileInfo struct {
 }
-
 
 func (s *Section) Set(key, value string) {
 	s.lock.Lock()
@@ -35,5 +36,5 @@ func (s *Section) Get(key string) (string, bool) {
 }
 
 func NewSection(name string) *Section {
-	return &Section{name: name, mem: NewMemTable(name)}
+	return &Section{name: name, mem: NewMemTable(name), sst: table.SstTables}
 }
