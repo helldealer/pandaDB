@@ -5,6 +5,7 @@ import (
 	"github.com/petar/GoLLRB/llrb"
 	"os"
 	"pandadb/log"
+	"pandadb/table"
 	"pandadb/util"
 	"pandadb/version"
 	"sync"
@@ -49,6 +50,7 @@ func (im *ImmutableMemTable) Dump(root string, seq, seqBak uint64) {
 		log.Wal.WriteCommit(im.name, seqBak, v)
 	}
 	fmt.Println("??????##################################")
+	table.SstTables.InsertFile(v, )
 	im.Reset()
 }
 

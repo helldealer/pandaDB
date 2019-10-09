@@ -2,25 +2,29 @@ package table
 
 import (
 	"fmt"
-	"os"
-	"pandadb/compaction"
 	"pandadb/util"
+	"sync"
 )
 
-var SstTables Sst
+var SstTables *Sst
 
 func Init() {
-	//build sst from tables.ind
+	//todo: build sst from tables.ind
+	SstTables = NewSst()
 	fmt.Println("sst init")
 }
 
 func NewSst() *Sst {
 	return &Sst{
+		layers: make([]*Layer, 3),
 	}
 }
 
+//锁的粒度是否可以更细致
+//把计数都改成原子的，别上sst锁
 type Sst struct {
-	layers        []Layer
+	lock          sync.RWMutex //这把锁是性能关键啊，不要随便锁
+	layers        []*Layer
 	height        int32 //current layer num
 	matureCount   int32 //file num
 	unMatureCount int32
@@ -28,6 +32,7 @@ type Sst struct {
 }
 
 //从tables.ind文件中获取layer和文件名的对应信息，在此之前先获取一共有多少层，保证layers数组不会越界
+//没必要加锁，初始化时候顺序写的，如果多线程初始化的话再考虑
 func (s *Sst) insertFileFromFile(name uint64, index []byte, layer int32) {
 	fi := NewFileInfoFromFile(name, index)
 	s.layers[layer].matureFiles = append(s.layers[layer].matureFiles, fi)
@@ -35,6 +40,8 @@ func (s *Sst) insertFileFromFile(name uint64, index []byte, layer int32) {
 
 func (s *Sst) InsertFile(name uint64, begin, end string, kvMap map[string]*ValueInfo) {
 	fi := NewFileInfoFromCompaction(name, begin, end, kvMap)
+	s.layers[0].lock.Lock()
+	defer s.layers[0].lock.Unlock()
 	s.layers[0].unMatureFiles = append(s.layers[0].unMatureFiles, fi)
 }
 
@@ -44,9 +51,13 @@ func (s *Sst) matureFile(name string) {
 }
 
 func (s *Sst) Get(key string) (string, bool) {
+	//原子读
+	//todo: 整一个flag标记文件sst非空，这个flag是不需要加锁的，因为一旦sst有内容，就一直会有内容，除非删库
 	if s.matureCount == 0 || s.height == -1 {
 		return "", false
 	}
+	s.lock.Lock()
+	defer s.lock.Unlock()
 	var i int32
 	for ; i <= s.height; i++ {
 		for _, f := range s.layers[i].matureFiles {
@@ -71,97 +82,4 @@ func (s *Sst) get(f *FileInfo, pos uint32, len uint16) []byte {
 	}
 	util.Assert.Equal(n, int(len))
 	return buf[:]
-}
-
-type Layer struct {
-	num           int32       //this layer num
-	matureFiles   []*FileInfo //can be access by user; 从新到旧排序
-	unMatureFiles []*FileInfo //not mature to access
-}
-
-//先长打开，后面整个根据访问统计来决定是常打开还是长打开
-type FileInfo struct {
-	name  uint64
-	f     *os.File
-	index *FileIndex
-}
-
-func newFileInfo(name uint64) *FileInfo {
-	fi := &FileInfo{}
-	fi.name = name
-	filename := fmt.Sprintf("%s/%d.tab", compaction.WorkerP.GetPath(), name)
-	f, err := os.Open(filename)
-	if err != nil {
-		panic("cannot open the file when build file info")
-	}
-	fi.f = f
-	return fi
-}
-
-func NewFileInfoFromCompaction(name uint64, begin, end string, kvMap map[string]*ValueInfo) *FileInfo {
-	fi := newFileInfo(name)
-	fi.index = NewFileIndex(begin, end, kvMap)
-	return fi
-}
-
-func NewFileInfoFromFile(name uint64, index []byte) *FileInfo {
-	fi := newFileInfo(name)
-	fi.index = NewFileIndexFromFile(index)
-	return fi
-}
-
-func NewFileIndex(begin, end string, kvMap map[string]*ValueInfo) *FileIndex {
-	fi := &FileIndex{
-		begin:begin,
-		end:end,
-		kvMap: make(map[string]*ValueInfo),
-	}
-	fi.kvMap = kvMap
-	return fi
-}
-
-func NewFileIndexFromFile(index []byte) *FileIndex {
-	fi := &FileIndex{
-		kvMap: make(map[string]*ValueInfo),
-	}
-	if !(index[0] == 'l' && index[1] == 'h' && index[2] == 'r') {
-		panic("magic num is incorrect")
-	}
-	//todo: 所有的硬编码换成参数
-	first := true
-	in := index[2:]
-	for {
-		l := util.BigEndBytesToUint16(in)
-		v := &ValueInfo{
-			util.BigEndBytesToUint32(in[2+l:]),
-			util.BigEndBytesToUint16(in[2+l+4:]),
-		}
-		k := string(in[2 : l+2])
-		fi.kvMap[k] = v
-		if first {
-			fi.begin = k
-			first = false
-		}
-		in = in[2+l+4+2:]
-		if len(in) == 0 {
-			fi.end = k
-			break
-		}
-	}
-	return fi
-}
-
-type FileIndex struct {
-	begin  string
-	end    string
-	kvMap  map[string]*ValueInfo
-	filter *BloomFiler
-}
-
-type ValueInfo struct {
-	pos uint32
-	len uint16
-}
-
-type BloomFiler struct {
 }

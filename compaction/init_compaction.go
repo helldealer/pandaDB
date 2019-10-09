@@ -78,6 +78,7 @@ func (w *Worker) Close() {
 
 //这里有个平衡问题：在内存中merge两棵树，dump到一个文件和不合并，dump到两个文件，后续compact时再归并
 //现在先选第二种方案
+//当考虑到想sst中注册unmature的file时，第二种方案有很大的不便利性，更换到第一种
 func MergeTrees() *llrb.LLRB {
 	panic("need implement")
 }
