@@ -30,6 +30,7 @@ func (s *Section) Set(key, value string) {
 func (s *Section) Get(key string) (string, bool) {
 	v, ok := s.mem.Get(key)
 	if ok {
+		//fmt.Println("get from mem ok")
 		return v, true
 	}
 	return s.sst.Get(key)

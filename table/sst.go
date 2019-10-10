@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"pandadb/util"
 	"sync"
+	"sync/atomic"
 )
 
 var SstTables *Sst
@@ -16,6 +17,7 @@ func Init() {
 
 func NewSst() *Sst {
 	return &Sst{
+		height: -1,
 		layers: make([]Layer, 3, 3),
 	}
 }
@@ -26,7 +28,7 @@ func NewSst() *Sst {
 type Sst struct {
 	lock          sync.RWMutex //这把锁是性能关键啊，不要随便锁
 	layers        []Layer
-	height        int32 //current layer num
+	height        int32 //current layer num, from 0 to max, default is -1
 	matureCount   int32 //file num
 	unMatureCount int32
 	totalCount    int32
@@ -40,6 +42,10 @@ func (s *Sst) insertFileFromFile(name uint64, root string, index []byte, layer i
 }
 
 func (s *Sst) InsertFile(name uint64, root, begin, end string, kvMap map[string]*ValueInfo) {
+	if s.height == -1 {
+		s.height = 0
+	}
+	atomic.AddInt32(&s.matureCount, 1)
 	fi := NewFileInfoFromCompaction(name, root, begin, end, kvMap)
 	s.layers[0].lock.Lock()
 	defer s.layers[0].lock.Unlock()
@@ -60,18 +66,24 @@ func (s *Sst) Get(key string) (string, bool) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	var i int32
-	for ; i <= s.height; i++ {
+	for ; i <= s.height+1; i++ {
+		fmt.Println("search in layers")
 		for _, f := range s.layers[i].matureFiles {
+			//fmt.Println("search in mature files")
+			//fmt.Printf("begin:%s, end:%s\n", f.index.begin, f.index.end)
 			if f.index.begin <= key && f.index.end >= key {
 				//add bloom filter
 				vInfo, ok := f.index.kvMap[key]
 				if !ok {
+					//fmt.Println("skip the no match layer")
 					continue
 				}
+				//fmt.Println("found the result in sst file")
 				return string(s.get(f, vInfo.pos, vInfo.len)), true
 			}
 		}
 	}
+	//fmt.Println("zero sst height")
 	return "", false
 }
 

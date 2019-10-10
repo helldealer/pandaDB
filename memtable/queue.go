@@ -35,7 +35,7 @@ func (im *ImMemTableRegistry) Push(elem *Element) {
 	if im.len == 0 {
 		util.Assert.NotNil(im.wait)
 		close(im.wait)
-		fmt.Println("registry has something now")
+		//fmt.Println("registry has something now")
 	}
 	im.len++
 	util.Assert.Equal(im.len, im.queue.Len())
@@ -55,7 +55,7 @@ func (im *ImMemTableRegistry) Pop() *Element {
 		im.wait = make(chan struct{})
 	}
 	e := heap.Pop(&im.queue).(*Element)
-	fmt.Printf("element pop: %v\n", e)
+	//fmt.Printf("element pop: %v\n", e)
 	return e
 }
 
@@ -94,9 +94,9 @@ func NewImTableRegistry() *ImMemTableRegistry {
 
 //seq you
 type Element struct {
-	table       *ImmutableMemTable
-	priority    int
-	index       int
+	table    *ImmutableMemTable
+	priority int
+	index    int
 }
 
 func (e *Element) GetImTable() *ImmutableMemTable {

@@ -2,13 +2,14 @@ package memtable
 
 import (
 	"fmt"
-	"github.com/petar/GoLLRB/llrb"
 	"os"
 	"pandadb/log"
 	"pandadb/table"
 	"pandadb/util"
 	"pandadb/version"
 	"sync"
+
+	"github.com/petar/GoLLRB/llrb"
 )
 
 //-----------------------------------------------------------//
@@ -41,7 +42,7 @@ index tail:      //index_start_pos: 4byte
 func (im *ImmutableMemTable) Dump(root string) {
 	im.lock.Lock()
 	defer im.lock.Unlock()
-	fmt.Println("start dump!")
+	//fmt.Println("start dump!")
 	var merged bool
 	t := im.memTree
 	if im.memTreeBak != nil {
@@ -55,7 +56,7 @@ func (im *ImmutableMemTable) Dump(root string) {
 func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string, merged bool) {
 	v := version.VerInfo.IncByOne()
 	filename := fmt.Sprintf("%s/%d.tab", root, v)
-	fmt.Println(filename)
+	//fmt.Println(filename)
 	f, err := os.Create(filename)
 	if err != nil {
 		panic("cannot open file " + filename)
@@ -98,8 +99,9 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string, merged bool) {
 		index = append(index, []byte(key)...)
 		index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
 		index = append(index, valueLenBytes...)
-		valuePos += uint32(keyValueWidth + valueLen)
 		kvMap[key] = table.NewValueInfo(valuePos, uint16(valueLen))
+		valuePos += uint32(keyValueWidth + valueLen)
+
 		//fmt.Println("< new entry >--------------:")
 		//fmt.Printf("key: %s; key len: %d; key byte: %v\nvaluepos: %d; index: %v\n",
 		//	key, keyLen, []byte(key), valuePos, index)
@@ -126,12 +128,12 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string, merged bool) {
 			bak = im.sequence - 2
 		}
 	}
-	//因为conver后im的seq自增了，所以这里减1，
-	// 如果有baktree的话，由于两次convert对应一次commit，所以要计算bak，把bak也记录进去
-	log.Wal.WriteCommit(im.name, im.sequence -1, bak, v)
-	fmt.Println("??????##################################")
+
 	//把table file注册到sst的layer0 mature files中
 	table.SstTables.InsertFile(v, root, begin, end, kvMap)
+	//因为conver后im的seq自增了，所以这里减1，
+	// 如果有baktree的话，由于两次convert对应一次commit，所以要计算bak，把bak也记录进去
+	log.Wal.WriteCommit(im.name, im.sequence-1, bak, v) //this should be at the end!
 	//info, _ := f.Stat()
 	//fmt.Printf("file size: %d\n", info.Size())
 

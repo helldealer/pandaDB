@@ -10,10 +10,11 @@ package memtable
 
 import (
 	"fmt"
-	"github.com/petar/GoLLRB/llrb"
 	"pandadb/log"
 	"pandadb/util"
 	"time"
+
+	"github.com/petar/GoLLRB/llrb"
 )
 
 const (
@@ -56,7 +57,7 @@ func (m *MemTable) Set(k, v string) {
 	//fmt.Println("set key value")
 	//fmt.Printf("tree len %d\n", m.memTree.Len())
 	if m.memTree.Len() >= TableChangeThreshold {
-		fmt.Println("table convert")
+		//fmt.Println("table convert")
 		if !m.convertToImmutable() {
 			m.WaitDumpFinish()
 			im := m.immutableMem
