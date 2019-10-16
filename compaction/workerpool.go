@@ -11,8 +11,9 @@ func Init() {
 }
 
 type WorkerPool struct {
-	path string
-	pool []DumpWorker
+	path        string
+	DumpPool    []DumpWorker
+	CompactPool []CompactWorker
 }
 
 func (wp *WorkerPool) SetPath(p string) {
