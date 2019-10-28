@@ -120,6 +120,10 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string, merged bool) {
 	if err != nil {
 		panic("write failed in " + filename)
 	}
+
+	//把table file注册到sst的layer0 mature files中
+	table.SstTables.InsertFile(v, root, begin, end, kvMap)
+
 	var bak uint64
 	if merged {
 		//如果merge了两棵树，那么需要在commit信息里把第一棵树的seq信息也加上，
@@ -128,9 +132,6 @@ func (im *ImmutableMemTable) DumpTree(t *llrb.LLRB, root string, merged bool) {
 			bak = im.sequence - 2
 		}
 	}
-
-	//把table file注册到sst的layer0 mature files中
-	table.SstTables.InsertFile(v, root, begin, end, kvMap)
 	//因为conver后im的seq自增了，所以这里减1，
 	// 如果有baktree的话，由于两次convert对应一次commit，所以要计算bak，把bak也记录进去
 	log.Wal.WriteCommit(im.name, im.sequence-1, bak, v) //this should be at the end!

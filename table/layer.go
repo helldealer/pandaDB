@@ -2,7 +2,10 @@ package table
 
 import (
 	"fmt"
+	"github.com/petar/GoLLRB/llrb"
 	"os"
+	"pandadb/util"
+	"pandadb/version"
 	"sync"
 )
 
@@ -11,11 +14,11 @@ type Layer struct {
 	num  int32 //this layer num
 	//can be access by user; 从旧到新排序
 	//整成循环队列
-	matureFiles     [2001]*FileInfo
-	matureFileCount int16
-	tail            int16 //point the next nil place
-	head            int16 //point the first element
-	unMatureFiles   []*FileInfo //not mature to access
+	matureFiles       [2001]*FileInfo
+	matureFileCount   int16
+	tail              int16       //point the next nil place
+	head              int16       //point the first element
+	unMatureFiles     []*FileInfo //not mature to access
 	unmatureFileCount int16
 
 	//compaction fields
@@ -29,10 +32,175 @@ type Layer struct {
 func (l *Layer) Merge() *os.FileInfo {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
-	if l.matureFileCount < 10
-	for i, f:= range l.matureFiles[l.head:l.tail] {
-		f.index.kvMap[]
+	cache := make(map[string]*ValueInfoWithFile)
+	tail := l.head + 10
+	if l.matureFileCount <= 10 {
+		tail = l.tail
 	}
+	//1. big map
+	for i, f := range l.matureFiles[l.head:tail] {
+		for k, v := range f.index.kvMap {
+			cache[k] = &ValueInfoWithFile{v, i}
+		}
+	}
+	//2. map => llrb
+	t := llrb.New()
+	for k, v := range cache {
+		t.ReplaceOrInsert(&Item{k, v})
+	}
+	//3.
+	version.VerInfo
+
+}
+
+type InputBuffer struct {
+	buffer      []byte
+	size        uint32
+	file        *os.File
+	sliceOffset uint32
+	fileOffset  uint32
+}
+
+func NewInputBuffer(cap, fileOffset uint32, file *os.File) *InputBuffer {
+	return &InputBuffer{buffer: make([]byte, cap), size: cap, file: file, fileOffset: fileOffset}
+}
+
+func (in *InputBuffer) UpdateInputBuffer(fileOffset uint32) {
+	in.fileOffset = fileOffset
+	in.sliceOffset = 0
+	in.buffer = in.buffer[:0]
+}
+
+func (in *InputBuffer) Buffer() []byte {
+	return in.buffer
+}
+
+func (in *InputBuffer) UpdateOffset(len uint32) bool {
+	if len+in.sliceOffset > in.size {
+		return false
+	}
+	in.sliceOffset += len
+	in.fileOffset += len
+}
+
+type InputBufferPool struct {
+	buffers []*InputBuffer
+	count   int
+}
+
+//lazy init buffer
+func NewInputBufferPool(count int) *InputBufferPool {
+	return &InputBufferPool{buffers: make([]*InputBuffer, count), count: count}
+}
+
+func (in *InputBufferPool) InitBuffer(index, cap, fileOffset uint32, file *os.File) *InputBuffer {
+	in.buffers[index] = NewInputBuffer(cap, fileOffset, file)
+	return in.buffers[index]
+}
+
+func (l *Layer) dumpTree(t *llrb.LLRB, root string) {
+	v := version.VerInfo.IncByOne()
+	filename := fmt.Sprintf("%s/%d.tab", root, v)
+	//fmt.Println(filename)
+	f, err := os.Create(filename)
+	if err != nil {
+		panic("cannot open file " + filename)
+	}
+	defer f.Close()
+
+	var (
+		//valuePosWidth     = 4
+		keyValueWidth = 2
+		valuePos      uint32
+		key           string
+		begin         string
+		end           string
+		kvMap         = make(map[string]*ValueInfo)
+		in            *InputBuffer
+	)
+	index := make([]byte, 3)
+	index[0] = 'l'
+	index[1] = 'h'
+	index[2] = 'r'
+
+	inputPool := NewInputBufferPool(10)
+
+	t.AscendGreaterOrEqual(&Item{}, func(i llrb.Item) bool {
+		item := i.(*Item)
+
+		key = item.GetKey()
+		if begin == "" {
+			begin = key
+		}
+		keyLen := len(key)
+		valueInfo := item.GetValue()
+		srcFileIndex := int(l.head) + valueInfo.index
+		srcFile := l.matureFiles[srcFileIndex].f
+		pos := valueInfo.info.pos
+		length := valueInfo.info.len
+
+		//init input buffer
+		if inputPool.buffers[srcFileIndex] == nil {
+			in := inputPool.InitBuffer(uint32(srcFileIndex), 5e7, valueInfo.info.pos, srcFile)
+			n,err := in.file.ReadAt(in.buffer, int64(pos))
+			if err != nil {
+				panic("read file failed")
+			}
+			in.size = uint32(n)
+		}
+
+		//find value in buffer, if not exist, reload buffer
+		if pos + uint32(length) > in.fileOffset + in.size {
+			in.buffer = in.buffer[:0]
+			in.sliceOffset = 0
+			n,err := in.file.ReadAt(in.buffer, int64(pos))
+			if err != nil {
+				panic("read file failed")
+			}
+			in.size = uint32(n)
+			in.fileOffset = pos
+		}
+
+		//write value to new file
+		pos - in.fileOffset
+
+		value := valueInfo.info
+		valueLen := len(value)
+		valueLenBytes := util.Uint16ToBigEndBytes(uint16(valueLen))
+		bodyEntry := append(valueLenBytes, []byte(value)...)
+		_, err := f.Write(bodyEntry) //返回的写入数量 暂时不检查，等到把统计文件大小也当做dump的参数时再考虑
+		if err != nil {
+			panic("write failed in " + filename)
+		}
+
+		index = append(index, util.Uint16ToBigEndBytes(uint16(keyLen))...)
+		index = append(index, []byte(key)...)
+		index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
+		index = append(index, valueLenBytes...)
+		kvMap[key] = NewValueInfo(valuePos, uint16(valueLen))
+		valuePos += uint32(keyValueWidth + valueLen)
+
+		//fmt.Println("< new entry >--------------:")
+		//fmt.Printf("key: %s; key len: %d; key byte: %v\nvaluepos: %d; index: %v\n",
+		//	key, keyLen, []byte(key), valuePos, index)
+		//fmt.Printf("value: %s; value len: %d, value byte: %v; valuepos: %v\n",
+		//	value, valueLen, []byte(value), util.Uint32ToBigEndBytes(valuePos))
+
+		return true
+	})
+	end = key
+	index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
+
+	//fmt.Println("< dump end >------------:")
+	//fmt.Printf("file end: index lenth: %d, index %v\n", len(index), index)
+
+	_, err = f.Write(index)
+	if err != nil {
+		panic("write failed in " + filename)
+	}
+
+	//把table file注册到sst的layer0 mature files中
+	table.SstTables.InsertFile(v, root, begin, end, kvMap)
 }
 
 //先长打开，后面整个根据访问统计来决定是常打开还是长打开
@@ -64,4 +232,21 @@ func NewFileInfoFromFile(name uint64, root string, index []byte) *FileInfo {
 	fi := newFileInfo(name, root)
 	fi.index = NewFileIndexFromFile(index)
 	return fi
+}
+
+type Item struct {
+	key   string
+	value *ValueInfoWithFile
+}
+
+func (i *Item) Less(b llrb.Item) bool {
+	return i.key < b.(*Item).key
+}
+
+func (i *Item) GetKey() string {
+	return i.key
+}
+
+func (i *Item) GetValue() *ValueInfoWithFile {
+	return i.value
 }

@@ -63,3 +63,8 @@ func NewValueInfo(pos uint32, len uint16) *ValueInfo{
 
 type BloomFiler struct {
 }
+
+type ValueInfoWithFile struct {
+	info *ValueInfo
+	index int
+}
