@@ -29,11 +29,14 @@ type Layer struct {
 //2. MAP => rbtree，dump到一个new version文件中
 //3. 转为rbtree的过程中维护一张最终涉及到的文件列表和各文件value pos的起始和终止位置。
 //4. 归并排序，由于已经在红黑树中排好序了，这个过程会比败者树加速的归并排序还要快。算是10路归并（有可能比10小）吧
-func (l *Layer) Merge() *os.FileInfo {
-	l.lock.RLock()
-	defer l.lock.RUnlock()
+func (l *Layer) Merge(root string) (*FileInfo, int16) {
 	cache := make(map[string]*ValueInfoWithFile)
+	l.lock.RLock()
 	tail := l.head + 10
+	if l.matureFileCount <= 5 {
+		l.lock.RUnlock()
+		return nil, 0
+	}
 	if l.matureFileCount <= 10 {
 		tail = l.tail
 	}
@@ -43,14 +46,17 @@ func (l *Layer) Merge() *os.FileInfo {
 			cache[k] = &ValueInfoWithFile{v, i}
 		}
 	}
+	l.lock.RUnlock()
 	//2. map => llrb
 	t := llrb.New()
 	for k, v := range cache {
 		t.ReplaceOrInsert(&Item{k, v})
 	}
-	//3.
-	version.VerInfo
+	//3. write t to new file
+	fi := l.dumpTree(t, root)
 
+	//4. update mature file queue after insert new file in next layer
+	return fi, tail - l.head
 }
 
 type InputBuffer struct {
@@ -98,7 +104,7 @@ func (in *InputBufferPool) InitBuffer(index, cap, fileOffset uint32, file *os.Fi
 	return in.buffers[index]
 }
 
-func (l *Layer) dumpTree(t *llrb.LLRB, root string) {
+func (l *Layer) dumpTree(t *llrb.LLRB, root string) *FileInfo {
 	v := version.VerInfo.IncByOne()
 	filename := fmt.Sprintf("%s/%d.tab", root, v)
 	//fmt.Println(filename)
@@ -141,34 +147,29 @@ func (l *Layer) dumpTree(t *llrb.LLRB, root string) {
 
 		//init input buffer
 		if inputPool.buffers[srcFileIndex] == nil {
-			in := inputPool.InitBuffer(uint32(srcFileIndex), 5e7, valueInfo.info.pos, srcFile)
-			n,err := in.file.ReadAt(in.buffer, int64(pos))
+			in = inputPool.InitBuffer(uint32(srcFileIndex), 5e7, valueInfo.info.pos, srcFile)
+			n, err := in.file.ReadAt(in.buffer, int64(pos))
 			if err != nil {
-				panic("read file failed")
+				panic("read file failed: " + err.Error())
 			}
 			in.size = uint32(n)
 		}
 
 		//find value in buffer, if not exist, reload buffer
-		if pos + uint32(length) > in.fileOffset + in.size {
+		if pos+uint32(length) > in.fileOffset+in.size {
 			in.buffer = in.buffer[:0]
 			in.sliceOffset = 0
-			n,err := in.file.ReadAt(in.buffer, int64(pos))
+			n, err := in.file.ReadAt(in.buffer, int64(pos))
 			if err != nil {
-				panic("read file failed")
+				panic("read file failed: " + err.Error())
 			}
 			in.size = uint32(n)
 			in.fileOffset = pos
 		}
 
 		//write value to new file
-		pos - in.fileOffset
-
-		value := valueInfo.info
-		valueLen := len(value)
-		valueLenBytes := util.Uint16ToBigEndBytes(uint16(valueLen))
-		bodyEntry := append(valueLenBytes, []byte(value)...)
-		_, err := f.Write(bodyEntry) //返回的写入数量 暂时不检查，等到把统计文件大小也当做dump的参数时再考虑
+		offset := pos - in.fileOffset
+		_, err = f.Write(in.buffer[offset : offset+uint32(length)+2])
 		if err != nil {
 			panic("write failed in " + filename)
 		}
@@ -176,9 +177,9 @@ func (l *Layer) dumpTree(t *llrb.LLRB, root string) {
 		index = append(index, util.Uint16ToBigEndBytes(uint16(keyLen))...)
 		index = append(index, []byte(key)...)
 		index = append(index, util.Uint32ToBigEndBytes(valuePos)...)
-		index = append(index, valueLenBytes...)
-		kvMap[key] = NewValueInfo(valuePos, uint16(valueLen))
-		valuePos += uint32(keyValueWidth + valueLen)
+		index = append(index, in.buffer[offset:offset+uint32(keyValueWidth)]...)
+		kvMap[key] = NewValueInfo(valuePos, uint16(length))
+		valuePos += uint32(keyValueWidth + int(length))
 
 		//fmt.Println("< new entry >--------------:")
 		//fmt.Printf("key: %s; key len: %d; key byte: %v\nvaluepos: %d; index: %v\n",
@@ -199,8 +200,8 @@ func (l *Layer) dumpTree(t *llrb.LLRB, root string) {
 		panic("write failed in " + filename)
 	}
 
-	//把table file注册到sst的layer0 mature files中
-	table.SstTables.InsertFile(v, root, begin, end, kvMap)
+	//return new file info
+	return NewFileInfoFromCompaction(v, root, begin, end, kvMap)
 }
 
 //先长打开，后面整个根据访问统计来决定是常打开还是长打开

@@ -17,7 +17,7 @@ func Init() {
 
 func NewSst() *Sst {
 	return &Sst{
-		height: -1,
+		height: 4,
 		layers: make([]Layer, 3, 3),
 	}
 }
@@ -26,23 +26,50 @@ func NewSst() *Sst {
 //把计数都改成原子的，别上sst锁
 //unmature file 可能用不着，垃圾文件清理时用？
 type Sst struct {
-	lock          sync.RWMutex //这把锁是性能关键啊，不要随便锁
+	lock sync.RWMutex //这把锁是性能关键啊，不要随便锁
 	/*
-	结合layer和大文件的优点：
-	第0层由immutable memtable 直接dump生成，数量限制为2000个，单个文件大小为4m左右；
-	第1层由merge第0层文件生成，归并时不与第1层已有文件合并，单纯是合并第0层较早文件。因此第1层也存在key重叠的情况，数量为2000，大小为40m。
-	第2层也是上一层的合并，文件大小为400m，数量为2000，共800g
-	第3层是最后一层，这一层合并上一层的文件，并与本层的文件合并，文件大小4g，数量2000，共计8t，这一层的文件key不重叠，内部有序，外部亦有序
+		结合layer和大文件的优点：
+		第0层由immutable memtable 直接dump生成，数量限制为2000个，单个文件大小为4m左右；
+		第1层由merge第0层文件生成，归并时不与第1层已有文件合并，单纯是合并第0层较早文件。因此第1层也存在key重叠的情况，数量为2000，大小为40m。
+		第2层也是上一层的合并，文件大小为400m，数量为2000，共800g
+		第3层是最后一层，这一层合并上一层的文件，并与本层的文件合并，文件大小4g，数量2000，共计8t，这一层的文件key不重叠，内部有序，外部亦有序
 	*/
 	layers        []Layer
-	height        int32 //current layer num, from 0 to max, default is -1
+	height        int32 //total layer num, now is 4
 	matureCount   int32 //file num
 	unMatureCount int32
 	totalCount    int32
 }
 
-func (s *Sst) Merge() {
-	s.layers
+func (s *Sst) Merge(root string) {
+	for i, l := range s.layers {
+		fi, n := l.Merge(root)
+		if fi != nil {
+			//1. delete old files
+			l.lock.Lock()
+			l.head = (l.head + n) % 2001
+			l.matureFileCount -= n
+			if l.matureFileCount < 0 {
+				panic("mature file count cannot be negative")
+			}
+			l.lock.Unlock()
+
+			//2. insert new file
+			if i != 3 {
+				layer := s.layers[i+1]
+				layer.lock.Lock()
+				if layer.matureFileCount == 2000 {
+					panic("waite func is not implement")
+				}
+				layer.matureFiles[layer.tail] = fi
+				layer.tail = (layer.tail + 1) % 2001
+				layer.matureFileCount++
+			}
+
+			//3. commit file info
+
+		}
+	}
 }
 
 //从tables.ind文件中获取layer和文件名的对应信息，在此之前先获取一共有多少层，保证layers数组不会越界
@@ -53,9 +80,6 @@ func (s *Sst) Merge() {
 //}
 
 func (s *Sst) InsertFile(name uint64, root, begin, end string, kvMap map[string]*ValueInfo) {
-	if s.height == -1 {
-		s.height = 0
-	}
 	atomic.AddInt32(&s.matureCount, 1)
 	fi := NewFileInfoFromCompaction(name, root, begin, end, kvMap)
 	layer := s.layers[0]
@@ -81,13 +105,13 @@ func (s *Sst) matureFile(name string) {
 func (s *Sst) Get(key string) (string, bool) {
 	//原子读
 	//todo: 整一个flag标记文件sst非空，这个flag是不需要加锁的，因为一旦sst有内容，就一直会有内容，除非删库
-	if s.matureCount == 0 || s.height == -1 {
+	if s.matureCount == 0 {
 		return "", false
 	}
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	var i int32
-	for ; i <= s.height+1; i++ {
+	for ; i <= s.height-1; i++ {
 		fmt.Println("search in layers")
 		layer := s.layers[i]
 		if layer.matureFileCount != 0 {
@@ -106,7 +130,7 @@ func (s *Sst) Get(key string) (string, bool) {
 						return string(s.get(f, vInfo.pos, vInfo.len)), true
 					}
 				}
-			}else {
+			} else {
 				for _, f := range layer.matureFiles[layer.head:] {
 					//fmt.Println("search in mature files")
 					//fmt.Printf("begin:%s, end:%s\n", f.index.begin, f.index.end)

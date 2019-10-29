@@ -54,7 +54,7 @@ func NewFileIndexFromFile(index []byte) *FileIndex {
 
 type ValueInfo struct {
 	pos uint32
-	len uint16
+	len uint16 //not include value length's length
 }
 
 func NewValueInfo(pos uint32, len uint16) *ValueInfo{

@@ -9,7 +9,7 @@ func (c *CompactWorker) Init() {}
 //compact files from sst mature files
 func (c *CompactWorker) Run() {
 
-	table.SstTables.
+	table.SstTables.Merge(WorkerP.path)
 }
 
 func (c *CompactWorker) Close() {}

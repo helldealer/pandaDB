@@ -14,6 +14,7 @@ var (
 	//commit 的bak有点词不达意，再改改
 	DefaultCommitFmt         = "commit:table:%s,sequence%d,bak%d,version%d\n"
 	DefaultConvertFmt        = "convert:table:%s,sequence%d\n"
+	DefaultCompaction
 	//DefaultK
 )
 
